@@ -1,1 +1,1 @@
-
+Contains my weekly exercises.
