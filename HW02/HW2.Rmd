@@ -1,0 +1,237 @@
+---
+title: "Data Visualization Homework Assignment 2"
+author: "Student's Name: Chutian Zhou UNI: cz2482"
+date: "March 12, 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+In this write-up, I will include code chunks^[I know they are not required, but I put them in the `html` file anyway for the TAs' better reference.], results as well as my short inpretations.
+
+##0. Housekeeping Stuff
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#Read packages
+library(leaflet)
+library(dplyr)
+library(htmlwidgets)
+library(ggplot2)
+```
+
+##Task 1: Location of Severe Fires
+
+The `leaflet` map below shows the fire accidents happened in New York City. The popup contains four pieces of information with regard to the incident: the type of the incident (*INCIDENT_TYPE_DESC*), the time the incident happened (*INCIDENT_DATE_TIME*), the time the first unit arrived (*ARRIVAL_DATE_TIME*) and the number of units on scene (*UNITS_ONSCENE*). A popup is realized through the `popup` argument in the `addCircles` function. A minimap is put at the bottom right.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#Read file
+incidents<-read.csv("severe_incidents.csv")
+
+incidents$INCIDENT_TYPE_DESC<-as.character(incidents$INCIDENT_TYPE_DESC)
+
+#Create "content"
+content<-paste("What type:",incidents$INCIDENT_TYPE_DESC,"<br/>",
+               "Incident time:",incidents$INCIDENT_DATE_TIME,"<br/>",
+               "First unit arrival time:",incidents$ARRIVAL_DATE_TIME,"<br/>",
+               "Units on scene:",incidents$UNITS_ONSCENE,"<br/>")
+#Draw map
+leaflet(incidents)%>%addTiles()%>%
+  addCircles(popup=content,fillOpacity=0.3)%>%
+  addProviderTiles("Stamen.TonerLite")%>%
+  setView(-73.9, 40.7, zoom = 10)%>%
+  addMiniMap(toggleDisplay=T,zoomAnimation=T)
+```
+
+##Task 2: Layers and Clusters
+###a) Color by Type of Property
+
+I recategorize an array of property types into five major groups: dwelling, business, outside, street, daily life and other. A legend is put at top right to show different types of properties that are affected across the year. It is obvious that fire accidents most frequently happen to residential buildings (aka "dwelling"). Notice that the "type of property" is also included in the popup.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#Change definitions
+ppt<-as.character(incidents$PROPERTY_USE_DESC)
+ppt1<-NA
+ppt1<-ifelse(ppt=="429 - Multifamily dwelling"|
+               ppt=="419 - 1 or 2 family dwelling","Dwelling",ppt1)
+ppt1<-ifelse(ppt=="500 - Mercantile, business, other"|
+               ppt=="599 - Business office"|
+               ppt=="161 - Restaurant or cafeteria","Business",ppt1)
+ppt1<-ifelse(ppt=="931 - Open land or field"|
+               ppt=="900 - Outside or special property, other","Outside",ppt1)
+ppt1<-ifelse(ppt=="962 - Residential street, road or residential driveway"|
+               ppt=="960 - Street, other","Street",ppt1)
+ppt1<-ifelse(ppt=="564 - Laundry, dry cleaning"|
+               ppt=="881 - Parking garage, (detached residential garage)"|
+               ppt=="579 - Motor vehicle or boat sales, services, repair"|
+               ppt=="519 - Food and beverage sales, grocery store","Daily life",ppt1)
+incidents$ppt2<-ppt1
+incidents$ppt2[is.na(incidents$ppt2)]<-"Other"
+
+#Colorize
+library(RColorBrewer)
+pal=colorFactor("Set1",domain=incidents$ppt2)
+color_ppt2=pal(incidents$ppt2)
+
+content<-paste("What type:",incidents$INCIDENT_TYPE_DESC,"<br/>",
+               "Incident time:",incidents$INCIDENT_DATE_TIME,"<br/>",
+               "First unit arrival time:",incidents$ARRIVAL_DATE_TIME,"<br/>",
+               "Units on scene:",incidents$UNITS_ONSCENE,"<br/>",
+               "Type of property:",incidents$ppt2,"<br/>")
+
+leaflet(incidents)%>%addTiles()%>%
+  addCircles(color=color_ppt2,popup=content,fillOpacity=0.2)%>%
+  addProviderTiles("Stamen.TonerLite")%>%
+  setView(-73.9, 40.7, zoom = 10)%>%
+  addMiniMap(toggleDisplay=T,zoomAnimation=T)%>%
+  addLegend(pal=pal,values=~incidents$ppt2,title="Property Types")
+```
+
+###b) Cluster
+To cluster all fire incidents by districts, **clusterOptions=markerClusterOptions()** is added to the `addCircleMarkers` function. Now, when zoomed out, only clusters can be seen.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+leaflet(incidents)%>%addTiles()%>%
+  addCircleMarkers(color=color_ppt2,popup=content,
+             clusterOptions=markerClusterOptions())%>%
+  addProviderTiles("Stamen.TonerLite")%>%
+  setView(-73.9, 40.7, zoom = 10)%>%
+  addMiniMap(toggleDisplay=T,zoomAnimation=T)%>%
+  addLegend(pal=pal,values=~incidents$ppt2,title="Property Types")
+```
+
+##Task 3: Fire Houses
+
+First of all, I want to point out a problem in the homework guidelines. The "non-clustered map" (between line 1 and line 2) should be the map in 2(a) instead of 2(b).
+
+Anyhow...to adjust the size of the circle markers representing locations of fire incidents by severity, I add `radius` argument in the first `addCircleMarkers` function, which inherits the dataset used in the `leaflet` function (ie "incidents"). I adjust the circle size by *TOTAL_INCIDENTS_DURATION*.
+
+By using another `addCircleMarkers` function (and now put "firehouse" dataframe behind `data`), the locations of the firehouses are drawn on the map as well. 
+
+Finally, *addLayersControl* function can create the layer selection button. One can click the button to choose which piece of information to show. Now, the map does not look very messy.
+
+All of the points are relatively small, but notice the largest green one approximately next to **North New Hyde Park**. According to the record, this accident (its *IM_INCIDENT_KEY* is 58020495) has lasted for 428335 seconds. It is the most severe accident of all 2,335 cases, if *TOTAL_INCIDENT_DURATION* is used as the benchmark. 
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#Read file
+firehouse<-read.csv("FDNY_Firehouse_Listing.csv")
+
+#Draw map
+leaflet(incidents)%>%addTiles()%>%
+  addCircleMarkers(color=color_ppt2,popup=content,fillOpacity=0.1,
+                   radius=~TOTAL_INCIDENT_DURATION/10000,
+                   group="Incidents")%>%
+  addCircleMarkers(data=firehouse,weight=0, radius=6,fillOpacity=0.4,
+                   popup=firehouse$FacilityAddress,
+                   group="Firehouses")%>%
+  addProviderTiles("Stamen.TonerLite")%>%
+  setView(-73.9, 40.7, zoom = 10)%>%
+  addMiniMap(toggleDisplay=T,zoomAnimation=T)%>%
+  addLegend(pal=pal,values=~incidents$ppt2,title="Property Types")%>%
+  addLayersControl(
+    overlayGroups=c("Incidents","Firehouses"),
+    options=layersControlOptions(collapsed = TRUE))
+```
+
+##Task 4: Distance from Firehouse and Response Time
+###a) Calculate Distance
+
+To find the closest fire house, I extract the latitude/longitude data of all accidents and fire houses from the original `incidents` and `firehouse` data frames, create spatial points for them, and then use the `gDistance` function to find the nearest fire house. 
+
+A list of the nearest fire houses is put below the code chunk. *IM_INCIDENT_KEY* is the incident's index number, *ppt2* is the type of property that is affected in the fire, and most importantly, the *nearest* column contains the identification number of the nearest fire house for each accident. 
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#Read packages
+library(rgeos)
+library(sp)
+library(geosphere)
+
+#Extract longitude/latitude information
+incidentsll<-incidents[,25:26]
+incidentsll<-incidentsll[complete.cases(incidentsll), ]
+firehousell<-firehouse[,5:6]
+firehousell$nearest=1:nrow(firehousell)
+firehousell<-firehousell[complete.cases(firehousell), ]
+
+#Create spatial points
+incidentssp<-SpatialPoints(incidentsll)
+firehousesp<-SpatialPoints(firehousell)
+
+#Find the nearest firehouse
+incidentsll$nearest<-apply(gDistance(firehousesp,incidentssp,byid=TRUE),1,which.min)
+
+incidentsll<-left_join(incidentsll,firehousell,by="nearest")
+incidentsll<-incidentsll[complete.cases(incidentsll), ]
+
+colnames(incidentsll)[1]<-"Latitude"
+colnames(incidentsll)[2]<-"Longitude"
+
+#Join back to the original incidents data frame
+incidents_final<-left_join(incidents,incidentsll,by=c("Latitude","Longitude"))
+
+incidents_final<-incidents_final[!duplicated(incidents_final), ]
+
+#List examples
+head(incidents_final[,c(1,34:35)])
+```
+
+Now that I have longitude/latitude data for the locations of the fire accidents and the nearest fire houses, using `distGeo` enables me to calculate distances between them.
+
+For the time difference (*ARRIVAL_DATE_TIME*-*INCIDENT_DATE_TIME*), I use the `difftime` function.
+
+Last but not least, I generate natural logged time difference and distance as my y and x variables for the scatter plot. The plot is put below.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#Calculate distance
+incidents_final$distance<-distGeo(incidents_final[,c(26,25)], incidents_final[,c(37,36)])
+
+#Calculate time difference
+incidents_final$INCIDENT_DATE_TIME<-strptime(x = as.character
+                                             (incidents_final$INCIDENT_DATE_TIME),
+                                             format = "%m/%d/%Y %I:%M")
+incidents_final$ARRIVAL_DATE_TIME<-strptime(x = as.character
+                                            (incidents_final$ARRIVAL_DATE_TIME),
+                                             format = "%m/%d/%Y %I:%M")
+incidents_final$difftime<-difftime(
+  incidents_final$ARRIVAL_DATE_TIME,
+  incidents_final$INCIDENT_DATE_TIME,units="mins")
+
+#Log distance
+incidents_final$logdist<-log(incidents_final$distance)
+
+#Log time difference
+incidents_final<-incidents_final[incidents_final$difftime>=0, ]
+incidents_final$logdifftime<-log(as.numeric(incidents_final$difftime))
+
+#Draw plot
+ggplot(incidents_final,aes(x=logdist,y=logdifftime))+geom_point(alpha=0.2)+
+  stat_smooth(method = 'lm',se =T)+theme_classic()+
+  scale_x_continuous(name="Distance (log)")+
+  scale_y_continuous(name="Time Difference (log)")+
+  ggtitle("Correlation between Distance to the Firehouse and Response Time")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The result is astounding. Initially, I expect a positive correlation between distance and response time. In other words, if the distance to the fire house is farther, the response time would probably be longer. However, this is not the case here. The fitted line drawn in the plot indicates that the logged time difference always holds at about 1.1 (or e^1.1=3 mins) or 1.2 (or e^1.2=3.3 mins). As a result, generally speaking, the response time holds constant no matter how far away the fire house is.
+
+###b) Map of Response Times
+
+The new map is bulit on the base map drawn for Task 1. I did not colorize the point to indicate the type of property that is affected in a fire. In contrast, this time, I emphasize the response time (natural logged) of the fire house in each accident. 
+
+```{r echo=T,message=FALSE,warning=FALSE}
+incidents_final$logdifftime<-as.numeric(incidents_final$logdifftime)
+
+spectral<-brewer.pal(11, "Spectral")
+resColor<-colorBin(spectral, incidents_final$logdifftime)
+
+leaflet(incidents_final)%>%addTiles()%>%
+  addCircleMarkers(weight=0,radius=3,fillOpacity=0.3,
+                   color=~resColor(logdifftime),popup=content)%>%
+  addProviderTiles("Stamen.TonerLite")%>%
+  setView(-73.9, 40.7, zoom = 10)%>%
+  addLegend(title="Response Time",pal=resColor,
+            values=~logdifftime, opacity=1,
+            position="topright")%>%
+  addMiniMap(toggleDisplay=T,zoomAnimation=T)
+```
+
+The map of response times basically tells the same story as the scatter plot in Task 4(a) has done. Most points are dark red or orange, showing that the logged response times for the accidents are mostly 0-1 (1 to 2.7 mins) and 1-2 (2.7 to 7.4 mins). To conclude, the fire houses in New York City are quite efficient in getting the work done.
