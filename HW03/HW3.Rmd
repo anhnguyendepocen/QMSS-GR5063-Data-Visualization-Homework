@@ -1,0 +1,399 @@
+---
+title: "Data Visualization Homework Assignment 3"
+author: "Student's Name: Chutian Zhou UNI: cz2482"
+date: "April 2, 2018"
+output: html_document
+---
+
+In this write-up, I will include code chunks^[I know they are not required, but I put them in the `html` file anyway for TAs' better reference.], results as well as my short inpretations.
+
+##0. Housekeeping Stuff
+```{r echo=T,message=FALSE,warning=FALSE}
+#Read essential packages
+library(dplyr)
+library(ggplot2)
+library(tm)
+library(qdap)
+library(parallel)
+library(pbapply)
+library(tidytext)
+library(wordcloud)
+library(quanteda)
+library(plotrix)
+library(magrittr)
+library(tidyverse)
+```
+
+##1: Identifying Successful Projects
+
+###a) Success by Category
+
+I define success as achievement ratio, which is calculated by dividing the actual fund the project receives (*pledged*) by the original target amount (*target*).
+
+To visualize "attractiveness" of each category, I group all observations by top categories (*top_category* in the `kickstarter` data frame) they belong to (theater, technology, publishing, etc.) first. After this step, the average achievement ratio of all projects in a certain category is calculated. The final step is simply correlating *top_category* with *mean* (i.e. average achievement ratio) in the `ggplot` function. 
+
+The code chunk below returns the plot.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#read file
+kickstarter<-read.csv("kickstarter_projects.csv",header=TRUE,sep=",")
+kickstarter<-select(kickstarter,-source_url)%>%unique()
+
+#generate achievement_ratio
+kickstarter$achievement_ratio<-kickstarter$pledged/kickstarter$goal
+
+#remove Inf
+kickstarter2<-kickstarter[kickstarter$achievement_ratio!=Inf,]
+
+#calculate mean achievement_ratio for each top category
+ks<-kickstarter2%>%group_by(top_category)%>%summarise(mean=mean(achievement_ratio))
+
+#remove the 16th row (NA)
+ks<-ks[-16,]
+
+#draw plot
+ggplot(ks,aes(top_category,mean))+
+  stat_summary(fun.y=mean,geom="bar")+coord_flip()+
+  theme_classic()+
+  scale_y_continuous(name="Achievement Ratio")+
+  scale_x_discrete(name="Category")+
+  ggtitle("Average Achievement Ratio for each Category")+
+  theme(plot.title = element_text(hjust =0.5))+coord_flip()
+```
+
+The figure above shows that projects relative to games are most successful in attracting funding. The average achievement ratio of this category is close to 12. The second and the third successful categories are comics and technology in terms of the mean value of the achievement ratio.
+
+##2: Writing your Success Story
+
+###a) Cleaning the Text and Word Cloud
+
+My sample of 1000 most successful projects are those have the largest achievement ratios. To extract such sample, I arrang all observations in the `kickstarter` data frame in a descending order in terms of their achievement ratios, subset the first 1000 of them and store them in the `success` data frame.^[See the first two lines of the chunk below.]
+
+I have also created the `unsuccess` data frame in a similar manner for the preparation of tackling Question 2(b).
+
+The critical step is using the `DataframeSource` and `VCorpus` functions to transform the `success` data frame to a corpus. In addition, I have used the `removeNumPunct` and `stemCompletion2` functions introduced by Professor in his lecture to clean and stem^[And complete the stems, of course.] the `success` corpus. After all these steps, I make a matrix, calculate word frequencies and draw a wordcloud of the most frequent words among the most successful 1000 projects based on term frequency.
+
+The code chunk below returns the wordcloud.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#1000 most successful
+success<-kickstarter%>%arrange(desc(achievement_ratio))
+success<-success[c(1:1000),c(2,9)]
+
+colnames(success)[1]<-"text"
+colnames(success)[2]<-"doc_id"
+
+success$text<-as.character(success$text)
+success$doc_id<-as.numeric(success$doc_id)
+
+#1000 most unsucessful
+unsuccess<-kickstarter%>%arrange(achievement_ratio)
+unsuccess<-unsuccess[c(1:1000),c(2,9)]
+
+colnames(unsuccess)[1]<-"text"
+colnames(unsuccess)[2]<-"doc_id"
+
+unsuccess$text<-as.character(unsuccess$text)
+unsuccess$doc_id<-as.numeric(unsuccess$doc_id)
+
+suc_source<-DataframeSource(success)
+suc_corpus<-VCorpus(suc_source)
+
+#cleaning function
+removeNumPunct<-function(x){gsub("[^[:alpha:][:space:]]*", "", x)}
+clean_corpus<-function(corpus){
+  corpus<-tm_map(corpus, removePunctuation)
+  corpus<-tm_map(corpus, content_transformer(tolower))
+  corpus<-tm_map(corpus, content_transformer(replace_symbol))
+  corpus<-tm_map(corpus, removeWords, c(stopwords("en")))  
+  corpus<-tm_map(corpus, removeNumbers)
+  corpus<-tm_map(corpus, content_transformer(removeNumPunct))
+  corpus<-tm_map(corpus, stripWhitespace)
+  return(corpus)
+}
+
+#use clean_corpus function to clean suc_corpus
+suc_corpus_clean<-clean_corpus(suc_corpus)
+
+#stemming suc_corpus_clean
+suc_stemmed<-tm_map(suc_corpus_clean,stemDocument)
+
+#stemcompletion
+stemCompletion2<-function(x,dictionary) {
+  x<-unlist(strsplit(as.character(x), " "))
+  x<-x[x != ""]
+  x<-stemCompletion(x, dictionary=dictionary)
+  x<-paste(x, sep="", collapse=" ")
+  PlainTextDocument(stripWhitespace(x))
+}
+
+#complete suc_stemmed
+suc_comp_all<-mclapply(suc_stemmed,stemCompletion2, 
+                     dictionary=suc_corpus_clean)
+
+success[]<-lapply(success,as.character)
+
+for (i in 1:dim(success)[1]){
+  suc_comp_all[[i]]$meta$id<-success[i,"doc_id"]
+}
+
+suc_comp_all<-as.VCorpus(suc_comp_all)
+
+#make a dtm
+suc_dtm<-DocumentTermMatrix(suc_comp_all)
+
+#convert suc_dtm to a matrix
+suc_m<-as.matrix(suc_dtm)
+
+#tidying suc_dtm
+suc_td<-tidy(suc_dtm)
+
+#calculating frequencies
+suc_tf_idf<-suc_td%>%
+  bind_tf_idf(term,document,count)%>%  
+  arrange(desc(tf)) 
+
+#draw wordcloud
+purple_orange<-brewer.pal(10,"PuOr")
+purple_orange<-purple_orange[-(1:2)]
+set.seed(1)
+wordcloud(suc_tf_idf$term,suc_tf_idf$tf, 
+          max.words=500,colors=purple_orange)
+```
+
+###b) Success in Words
+
+The first step is merging `success` and `unsuccess`. I use the `rbind` function here. I name the outcome data frame as `total`.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#merge success and unsuccess
+total<-rbind(success,unsuccess)
+
+total_source<-DataframeSource(total)
+total_corpus<-VCorpus(total_source)
+
+#-------these are cleaning and stemming steps--------
+#clean total_corpus
+total_corpus_clean<-clean_corpus(total_corpus)
+
+#stem total_corpus_clean
+total_stemmed<-tm_map(total_corpus_clean,stemDocument)
+
+#complete total_stemmed
+total_comp_all<-mclapply(total_stemmed,stemCompletion2, 
+                       dictionary=total_corpus_clean)
+
+total[]<-lapply(total, as.character)
+
+for (i in 1:dim(total)[1]){
+  total_comp_all[[i]]$meta$id<-total[i,"doc_id"]
+}
+
+total_comp_all<-as.VCorpus(total_comp_all)
+#-----------------------------------------------------
+```
+
+The tricky yet critical step in this question, from my perspective, is converting `total_m` (a matrix converted from a term-document matrix) to `total_df` (a data frame). This is for the convenience of calculating raw count of each specific word in 1000 most successful projects and their counterparts. 
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#make a tdm
+total_tdm<-TermDocumentMatrix(total_comp_all)
+
+#convert tdm to a matrix
+total_m<-as.matrix(total_tdm)
+
+#convert matrix to a df
+total_df<-as.data.frame(total_m)
+```
+
+To have an impression of `tota_df`, see the chunk below for the dimension as well as the first three columns and rows of this data frame.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#dimension of total_df
+dim(total_df)
+
+#the first three columns and rows of total_df
+total_df[1:3,1:3]
+```
+
+In `total_df`, the labels of the first 1000 columns are IDs of 1000 most successful projects, and the labels from column 1001 to column 2000 are IDs of 1000 least successful ones. *suc_sum*, the frequency of each specific word in all successful projects, is calculated through the `rowSums` function. Similarly, *unsuc_sum* is a column containing the word count of all words for all unsuccessful projects.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#generate suc_sum, which is the sum of word counts, as well as unsuc_sum
+total_df$suc_sum<-rowSums(total_df[,1:1000])
+total_df$unsuc_sum<-rowSums(total_df[,1001:2000])
+```
+
+Finally, the chunk below generates the pyramid plot as the question aks. The plot shows the frequency differences of top 20 words between successful and unsuccessful projects.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#draw plot
+common_words<-subset(total_df,total_df[,2001]>0&total_df[,2002]>0)
+difference<-abs(common_words[,2001]-common_words[,2002])
+common_words<-cbind(common_words, difference)
+common_words<-common_words[,2001:2003]
+common_words<-common_words[order(common_words[, 3],decreasing=TRUE),]
+top20_df<-data.frame(x=common_words[1:20,1], 
+                     y=common_words[1:20,2], 
+                     labels=rownames(common_words[1:20, ]))
+pyramid.plot(top20_df$x,top20_df$y,labels=top20_df$labels, 
+                  gap=10,top.labels=c("Successful Projects", " ", "Unsuccessful Projects"), 
+                  main="Words in Common",laxlab = NULL, 
+                  raxlab=NULL,unit=NULL,labelcex=0.5)
+```
+
+###c) Simplicity as a virtue
+To have more variations, I focus on the original `kickstarter` data frame instead of `total`. 
+
+Overall speaking, this question is simple and intuitive. The readability measure, Flesh Kincaid, is calculated via the `textstat_readability` function. 
+
+I have a drawn a scatter plot correlating the readability measure with the achievement ratio. The smoother shows that the achievement ratio remains constant at a very low value (approximately 0) no matter how the Flesch-Kincaid Grade Level changes. We cannot argue that there is a positive correlation between variable *Flesch.Kincaid* and variable *achievement_ratio*, as some people might contend.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+kickstarter$blurb<-as.character(kickstarter$blurb)
+fk<-textstat_readability(kickstarter$blurb, 
+                                  measure=c('Flesch.Kincaid'))
+
+#there is a mismatch...
+fk$document<-as.numeric(gsub("text", "", fk$document))
+kickstarter$document<-1:nrow(kickstarter)
+kickstarter<-kickstarter%>%left_join(fk)
+
+#draw plot
+ggplot(kickstarter,aes(Flesch.Kincaid,achievement_ratio))+geom_point(alpha=0.5)+
+  geom_smooth()+theme_classic()+
+  xlab("Flesch-Kincaid Grade Level")+
+  ylab("Achievement Ratio")+
+  ggtitle("Correlation between the Readability Measure and Achievement Ratio")+
+  theme(plot.title=element_text(hjust=0.5))
+```
+
+##3. Sentiment
+
+###a) Stay Positive
+
+In this question, I first generate a data frame called `total2`. It includes 1979 most and least successful projects (I have deleted duplicates), and has three variables: *text* (i.e. blurbs in the `kickstarter` data frame), *doc_id* and *achievement_ratio*. I retain *achievement_ratio* in `total2` because I will draw a scatter plot later correlating the polarity score with the achievement ratio.
+
+The tone, or in other words, the polarity score for each text, is generated by using the `polarity` function contained in the `qdap` package. The outcome result is a list-like "large polarity", so the next step is to extract useful information (i.e. *doc_id* and *polarity*) from it and put them in a new data frame (I name it `sentiment2`).  
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#create subset, which has id and a_r
+subset<-kickstarter[,c(9,23)]
+
+#change "id" to "doc_id" 
+colnames(subset)[1]<-"doc_id"
+
+#change the format of doc_id in total
+total$doc_id<-as.integer(total$doc_id)
+
+#merge total and subset. Now we have text, doc_id and a_r
+total2<-total%>%left_join(subset)
+
+#remove duplicates
+total2<-total2[!duplicated(total2$text),]
+
+#get polarity score
+sentiment<-total2%$%polarity(total2$text,doc_id)
+
+#it's a "Large polarity". Now convert it into a data frame
+sentiment2<-data.frame(doc_id=sentiment$all$doc_id,polarity=sentiment$all$polarity)
+```
+
+Lastly, I combine `sentiment2` and `total2` together so that the outcome data frame `total3` has four essential variables: *text*, *doc_id*, *achievement_ratio* and *polarity* (see the chunk below for the first five rows). The scatter plot thus can be drawn.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#merge total2 and sentiment2. Now we have a_r as well as polarity score
+total3<-total2%>%left_join(sentiment2)
+
+total3[c(1:5),c(1:4)]
+
+#draw plot
+ggplot(total3,aes(polarity,achievement_ratio))+geom_point(alpha=0.5)+
+  geom_smooth()+
+  theme_classic()+ylab("Achievement Ratio")+xlab("Polarity Score")+
+  ggtitle("Correlation between Tone of the Document and Success")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  labs(caption="Note: The sample is confined to top 1000 and bottom 1000 most successful projects.")
+```
+
+Again, there is no obvious correlation between polarity score and achievement ratio; the latter is not affected by the independent variable *polarity*, at least according to the figure above. It seems that the tone of the short description of a project does not have impacts on its success. This makes sense; usually the exact entity rather than the description of a project determines its success.
+
+###b) Positive vs Negative
+
+First of all, I remove all observations in `total3` that have zeros in polarity score.^[Because I regard polarity score>0 as positive, while polarity score<0 as negative. For the texts that have polarity scores equal to 0, they are sort of "neutral" and should not be considered.] Then, I generate a categorical variable *set* that is "positive" if the polarity score is greater than 0, and "negative" if the polarity is smaller than 0.
+
+The next step is consequential: applying the `aggregate` function to the data frame `total4` which has two variables *text* and *set* to have two large sets of documents (i.e. positive and negative). 
+
+The following steps are just repeating what I have done in Question 2(a): converting the data frame to a corpus, cleaning it using the `clean_corpus` function introduced by Professor, converting the clean corpus to a term-document matrix and ultimately a matrix.^[I think there is a problem in the instruction of Question 3(b). To draw a comparison cloud, we should have a term-document matrix, not a document-term matrix as Professor has asked.]
+
+```{r echo=T,message=FALSE,warning=FALSE}
+#remove all obs that have 0s in polarity score
+total4<-total3[apply(total3[c(2:4)],1,function(z)!any(z==0)),] 
+
+#generate positive/negative
+total4$set<-ifelse(total4$polarity>0,"positive","negative")
+
+#subset total4 so that we only have text and set
+total4<-total4[,c(1,5)]
+
+#aggregate texts based on positive/negative
+total4<-aggregate(total4$text, list(total4$set), paste, collapse="")
+
+colnames(total4)[1]<-"doc_id"
+colnames(total4)[2]<-"text"
+total4$doc_id<-as.factor(total4$doc_id)
+
+total4_source<-DataframeSource(total4)
+total4_corpus<-VCorpus(total4_source)
+
+#clean total4_corpus
+total4_corpus_clean<-clean_corpus(total4_corpus)
+
+#create a term_document matrix
+total4_tdm<-TermDocumentMatrix(total4_corpus_clean)
+
+#convert tdm to a matrix
+total4_m<-as.matrix(total4_tdm)
+
+comparison.cloud(total4_m, colors = c("orange", "blue"), 
+                 scale=c(0.1,2), title.size= 1, 
+                 max.words=150)
+```
+
+The graph above is the comparison cloud showing the most frequent positive and negative words in the sample of top and bottom 1000 successful projects.
+
+###c) Get in Their Mind
+I think this question is ambiguous in what exactly it wants me to do, so I will provide my personal answer here.
+
+I intuition is drawing a scatter plot correlating the NRC score and the achievement ratio (pretty much like the one in 3(a)). The variable *score_nrc* (*nrc_positive*-*nrc_negative*) is what I generate for the preparation of the figure. My reasoning is that all words essentially can be categorized into two groups: positive and negative. For instance, "anger", "disgust", "fear", "sadness" all belong to negative words, whereas "joy" and "trust" are both subsets of positive words. So why not have a general NRC score that accounts for all these emotions?^[Of course, I have generated word count under each emotion.]
+
+The chunk below shows how I extract words from original texts in `total2`, clean the `total2_tidy` data frame and calculate the NRC score.
+
+```{r echo=T,message=FALSE,warning=FALSE}
+total2_clean<-total2 %>% 
+  mutate(h_number=row_number())
+
+total2_tidy<-total2_clean%>% 
+  unnest_tokens(word,text)
+
+total2_tidy<-total2_tidy %>% 
+  anti_join(stop_words)
+
+sentiment_nrc<-total2_tidy %>% 
+  inner_join(get_sentiments("nrc")) %>% 
+  count(h_number, sentiment) %>%
+  spread(sentiment, n, fill=0) %>%
+  setNames(c(names(.)[1],paste0('nrc_', names(.)[-1]))) %>%
+  mutate(score_nrc=nrc_positive-nrc_negative) %>%
+  ungroup()
+
+total2_full<-full_join(total2_clean,sentiment_nrc)%>% 
+  mutate_each(funs(replace(.,which(is.na(.)),0)),starts_with("score"),starts_with("nrc"))
+
+ggplot(total2_full,aes(score_nrc,achievement_ratio))+geom_point(alpha=0.5)+
+  xlab("NRC Score")+ylab("Achievement Ratio")+theme_classic()+
+  ggtitle("Correlation between NRC Score and Success")+
+  theme(plot.title = element_text(hjust = 0.5))+geom_smooth()
+```
+
+Again, the figure shows that the NRC score, calculated by minusing negative word count from positive word count, has no obvious effect on the achievement ratio. In essence, based on Question 3(a), (b) and (c), we are pretty confident to draw the conclusion that the tone of the blurb is not an efficient predictor of the success of a project. 
